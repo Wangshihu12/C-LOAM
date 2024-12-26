@@ -177,85 +177,87 @@ public:
         }
     }
 
-    // project pointcloud to range image
+    /**
+     * @brief 将点云投影到深度图范围图中
+     *
+     * @param pcl_in 输入点云的指针
+     * @param range_image_idx 输出的范围图索引矩阵
+     * @return 返回生成的深度范围图
+     *
+     * 将输入的点云投影到二维图像平面上，根据点的深度值生成范围图，并记录每个像素点对应的点云索引。
+     */
     cv::Mat projectPointCloud(const pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_in, cv::Mat &range_image_idx)
     {
-        // 统一用deg度作为单位
-        int kNumRimgRow = std::round(V_FOV * image_res);
-        int kNumRimgCol = std::round(H_FOV * image_res);
+        // 计算范围图的行列数，基于垂直和水平视场角及分辨率
+        int kNumRimgRow = std::round(V_FOV * image_res); // 范围图行数
+        int kNumRimgCol = std::round(H_FOV * image_res); // 范围图列数
 
-        // std::vector<float> image_means{12.12, 10.88, 0.23, -1.04, 0.21};
-        // std::vector<float> image_stds{12.32, 11.47, 6.91, 0.86, 0.16};
-        // float* range_images = new float[1 * kNumRimgRow * kNumRimgCol]();
-        // float* range_images_idx = new float[1 * kNumRimgRow * kNumRimgCol]();
-        cv::Mat range_image = cv::Mat(kNumRimgRow, kNumRimgCol, CV_32FC1, cv::Scalar::all(100));
-        // cv::Mat range_image_idx = cv::Mat(kNumRimgRow, kNumRimgCol, CV_32SC1, cv::Scalar::all(0));
+        // 初始化范围图和索引矩阵
+        cv::Mat range_image = cv::Mat(kNumRimgRow, kNumRimgCol, CV_32FC1, cv::Scalar::all(100)); // 初始化深度范围图，初始值为100（表示远距离点）
+        range_image_idx = cv::Mat(kNumRimgRow, kNumRimgCol, CV_32SC1, cv::Scalar::all(0));       // 初始化索引范围图
 
-        int num_points = pcl_in->points.size();
+        // 遍历输入点云的每个点
+        int num_points = pcl_in->points.size(); // 点云点的数量
         for (int idx = 0; idx < num_points; idx++)
         {
             const auto &x = pcl_in->points[idx].x;
             const auto &y = pcl_in->points[idx].y;
             const auto &z = pcl_in->points[idx].z;
-            // 球面投影算出来的是弧度rad
-            const float range = std::sqrt(x * x + y * y + z * z);
-            const float yaw = std::atan2(y, x);
-            const float pitch = std::atan2(z, std::sqrt(x * x + y * y));
 
-            float proj_row = (1.0f - (pitch * 180.0 / M_PI + std::abs(V_FOV_DOWN)) / (V_FOV - float(0.0))) * kNumRimgRow;
-            float proj_col = ((yaw * 180.0 / M_PI + (H_FOV / float(2.0))) / (H_FOV - float(0.0))) * kNumRimgCol;
+            // 计算点的球面投影参数
+            const float range = std::sqrt(x * x + y * y + z * z);        // 点到原点的距离（深度值）
+            const float yaw = std::atan2(y, x);                          // 点在水平平面的偏航角（弧度）
+            const float pitch = std::atan2(z, std::sqrt(x * x + y * y)); // 点在垂直平面的俯仰角（弧度）
+
+            // 将球面坐标投影到二维范围图坐标
+            float proj_row = (1.0f - (pitch * 180.0 / M_PI + std::abs(V_FOV_DOWN)) / (V_FOV - float(0.0))) * kNumRimgRow; // 计算行索引
+            float proj_col = ((yaw * 180.0 / M_PI + (H_FOV / float(2.0))) / (H_FOV - float(0.0))) * kNumRimgCol;          // 计算列索引
             proj_row = std::round(proj_row);
             proj_col = std::round(proj_col);
+
+            // 限制索引范围在有效范围内
             const int v = clamp<int>(static_cast<int>(proj_row), 0, kNumRimgRow - 1);
             const int u = clamp<int>(static_cast<int>(proj_col), 0, kNumRimgCol - 1);
 
-            // range_image.at<float>(v, u) = range;
-            // range_image_idx.at<float>(v, u) = idx;
-            // if(range < range_images[0 * width * height + v * width + u]){
-            //     range_images[0 * width * height + v * width + u] = range;
-            //     range_images_idx[0 * width * height + v * width + u] = idx;
-            // }
+            // 如果当前点的深度小于已有深度值，更新范围图和索引矩阵
             if (range < range_image.at<float>(v, u))
             {
-                range_image.at<float>(v, u) = range;
-                range_image_idx.at<int>(v, u) = idx;
-                // range_image_idx.at<cv::Vec3i>(v, u)[c] = idx;
-                // c = c < channel - 1 ? c++ : c;
-                // range_images_idx[0 * kNumRimgRow * kNumRimgCol + v * kNumRimgCol + u] = idx;
+                range_image.at<float>(v, u) = range; // 更新深度范围图
+                range_image_idx.at<int>(v, u) = idx; // 更新点云索引矩阵
             }
-            // range_images[0 * width * height + v * width + u] = range;
-            // (range - image_means.at(0)) / image_stds.at(0);
-            // range_images_idx[0 * width * height + v * width + u] = idx;
-            // range_images[1 * width * height + v * width + u] =
-            //     (x - image_means.at(1)) / image_stds.at(1);
-            // range_images[2 * width * height + v * width + u] =
-            //     (y - image_means.at(2)) / image_stds.at(2);
-            // range_images[3 * width * height + v * width + u] =
-            //     (z - image_means.at(3)) / image_stds.at(3);
-            // range_images[4 * width * height + v * width + u] =
-            //     (intensity - image_means.at(4)) / image_stds.at(4);
         }
-        // cv::Mat range_image = cv::Mat(height, width, CV_32FC1, static_cast<void*>(range_images));
-        // range_image_idx = cv::Mat(kNumRimgRow, kNumRimgCol, CV_32SC1, static_cast<void*>(range_images_idx));
-        // cv::Mat normalized_range, u8_range, color_map;
-        // cv::normalize(range_image, normalized_range, 255, 0, cv::NORM_MINMAX);
-        // normalized_range.convertTo(u8_range, CV_8UC1);
-        // cv::applyColorMap(u8_range, color_map, cv::COLORMAP_JET);
 
-        // return std::pair<cv::Mat, cv::Mat>(rangeMat, rangeMat_idx);
+        // 返回生成的深度范围图
         return range_image;
     }
 
+    /**
+     * @brief 根据动态点索引获取静态点的索引列表
+     *
+     * 根据动态点索引，从所有点的索引中排除动态点的索引，返回剩余的静态点索引。
+     *
+     * @param dynamic_point_idx 动态点的索引列表
+     * @param all_points_number 点云中所有点的总数量
+     * @return 静态点的索引列表
+     */
     std::vector<int> getStaticIdxFromDynamicIdx(const std::vector<int> &dynamic_point_idx, int all_points_number)
     {
+        // 创建包含所有点索引的向量，范围从 0 到 all_points_number-1
         std::vector<int> pt_idx_all = linspace<int>(0, all_points_number, all_points_number);
 
+        // 将所有点索引转换为集合以便高效处理
         std::set<int> pt_idx_all_set(pt_idx_all.begin(), pt_idx_all.end());
+
+        // 遍历动态点索引，从集合中移除对应索引
         for (auto &dyna_pt_idx : dynamic_point_idx)
         {
             pt_idx_all_set.erase(dyna_pt_idx);
         }
+
+        // 将剩余的静态点索引从集合转换为向量
         std::vector<int> static_point_indexes(pt_idx_all_set.begin(), pt_idx_all_set.end());
+
+        // 以下注释代码为另一种实现方式，使用哈希表优化索引查找：
         // std::vector<int> static_point_indexes;
         // std::unordered_set<int> dynamic_hash;
         // for(auto &d : dynamic_point_idx){
@@ -268,19 +270,35 @@ public:
         //     static_point_indexes.emplace_back(idx);
         // }
 
+        // 返回静态点索引列表
         return static_point_indexes;
     }
 
+    /**
+     * @brief 使用指定的点索引解析静态地图点云
+     *
+     * 根据输入的点索引，从点云中提取指定点并生成新的点云。
+     *
+     * @param point_idx 输入的点索引列表
+     * @param pcl_new_raw 输入的点云数据（原始点云）
+     * @param pcl_out_raw 输出的点云数据（提取后的点云）
+     */
     void parseStaticMapPointcloudUsingPtIdx(std::vector<int> &point_idx, pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_new_raw, pcl::PointCloud<pcl::PointXYZI>::Ptr &pcl_out_raw)
     {
-        // extractor
+        // 创建索引提取器
         pcl::ExtractIndices<pcl::PointXYZI> extractor;
+
+        // 将输入的索引列表转换为共享指针类型，供提取器使用
         boost::shared_ptr<std::vector<int>> index_ptr = boost::make_shared<std::vector<int>>(point_idx);
+
+        // 设置提取器的输入点云和点索引
         extractor.setInputCloud(pcl_new_raw);
         extractor.setIndices(index_ptr);
-        extractor.setNegative(false); // If set to true, you can extract point clouds outside the specified index
 
-        // parse
+        // 设置提取模式，false 表示仅提取指定索引的点
+        extractor.setNegative(false); // 如果设置为 true，则提取点云中不包含在指定索引中的点
+
+        // 清空输出点云并填充提取结果
         pcl_out_raw->clear();
         extractor.filter(*pcl_out_raw);
     }
@@ -319,60 +337,81 @@ public:
         extractor.filter(*pcl_out_raw);
     }
 
+    /**
+     * @brief 从激光点云中移除动态物体，并生成静态点云
+     *
+     * 通过计算当前帧与前一帧的深度图差异，识别动态点并移除，从而生成静态点云。
+     */
     void removeDynamicObjects()
     {
-        static bool first_flag = 1;
+        static bool first_flag = 1; // 标记是否为第一次调用
         if (first_flag)
         {
-            first_flag = 0;
-            lastCloud->clear();
-            *lastCloud = *laserCloudIn;
-            return;
+            first_flag = 0;             // 设置为非首次
+            lastCloud->clear();         // 清空上一次点云
+            *lastCloud = *laserCloudIn; // 保存当前点云作为上一帧点云
+            return;                     // 结束函数
         }
-        cv::Mat rangeImage_now_idx = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32SC1, cv::Scalar::all(0));
-        cv::Mat rangeImage_submap_idx = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32SC1, cv::Scalar::all(0));
-        cv::Mat rangeImage_now = projectPointCloud(laserCloudIn, rangeImage_now_idx);
-        cv::Mat rangeImage_submap = projectPointCloud(lastCloud, rangeImage_submap_idx);
-        cv::Mat rangeImage_diff = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32FC1, cv::Scalar::all(0.0)); // float matrix, save range value
-        cv::absdiff(rangeImage_now, rangeImage_submap, rangeImage_diff);
-        std::vector<int> dynamic_point_idx; // 当前帧动态点索引
+
+        // 创建当前帧和子地图的索引和深度图
+        cv::Mat rangeImage_now_idx = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32SC1, cv::Scalar::all(0));    // 当前帧索引图
+        cv::Mat rangeImage_submap_idx = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32SC1, cv::Scalar::all(0)); // 子地图索引图
+
+        // 投影点云到深度图
+        cv::Mat rangeImage_now = projectPointCloud(laserCloudIn, rangeImage_now_idx);    // 当前帧深度图
+        cv::Mat rangeImage_submap = projectPointCloud(lastCloud, rangeImage_submap_idx); // 上一帧深度图
+
+        // 计算深度图差值
+        cv::Mat rangeImage_diff = cv::Mat(V_FOV * image_res, H_FOV * image_res, CV_32FC1, cv::Scalar::all(0.0)); // 差异图
+        cv::absdiff(rangeImage_now, rangeImage_submap, rangeImage_diff);                                         // 计算绝对差异
+
+        // 动态点索引
+        std::vector<int> dynamic_point_idx; // 保存动态点的索引
         for (int row_idx = 0; row_idx < rangeImage_diff.rows; row_idx++)
         {
             for (int col_idx = 0; col_idx < rangeImage_diff.cols; col_idx++)
             {
-                float this_diff = rangeImage_diff.at<float>(row_idx, col_idx);
-                float this_range = rangeImage_now.at<float>(row_idx, col_idx);
-                float adaptive_coeff = 0.5;
-                float adaptive_dynamic_descrepancy_threshold = adaptive_coeff * this_range; // adaptive descrepancy threshold
+                float this_diff = rangeImage_diff.at<float>(row_idx, col_idx);              // 当前点的差异值
+                float this_range = rangeImage_now.at<float>(row_idx, col_idx);              // 当前点的深度值
+                float adaptive_coeff = 0.5;                                                 // 自适应系数
+                float adaptive_dynamic_descrepancy_threshold = adaptive_coeff * this_range; // 自适应动态差异阈值
+
+                // 判断是否为动态点
                 if (this_diff > adaptive_dynamic_descrepancy_threshold && this_diff < 100)
                 {
-                    dynamic_point_idx.emplace_back(rangeImage_now_idx.at<int>(row_idx, col_idx));
+                    dynamic_point_idx.emplace_back(rangeImage_now_idx.at<int>(row_idx, col_idx)); // 保存动态点索引
                 }
             }
         }
-        // std::cout << "raw pointcloud number is: " << laserCloudIn->points.size() << std::endl;
-        // std::cout << "dynamic count number is: " << dynamic_point_idx.size() << std::endl;
-        // 计算当前帧静态点索引
-        std::vector<int> static_point_idx = getStaticIdxFromDynamicIdx(dynamic_point_idx, laserCloudIn->points.size());
-        // std::cout << "static count number is: " << static_point_idx.size() << std::endl;
-        pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_new_out(new pcl::PointCloud<pcl::PointXYZI>);
-        parseStaticMapPointcloudUsingPtIdx(static_point_idx, laserCloudIn, pcl_new_out);
-        *lastCloud = *laserCloudIn;
-        *laserCloudIn = *pcl_new_out;
 
-        // publish range image
-        cv::Mat normalized_range, u8_range, color_map;
-        sensor_msgs::ImagePtr rangeImage_now_msg, rangeImage_last_msg;
-        cv::normalize(rangeImage_now, normalized_range, 255, 0, cv::NORM_MINMAX);
-        normalized_range.convertTo(u8_range, CV_8UC1);
-        cv::applyColorMap(u8_range, color_map, cv::COLORMAP_JET);
-        rangeImage_now_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", color_map).toImageMsg();
-        pubRangeImageNow.publish(rangeImage_now_msg);
-        cv::normalize(rangeImage_submap, normalized_range, 255, 0, cv::NORM_MINMAX);
-        normalized_range.convertTo(u8_range, CV_8UC1);
-        cv::applyColorMap(u8_range, color_map, cv::COLORMAP_JET);
-        rangeImage_last_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", color_map).toImageMsg();
-        pubRangeImageLast.publish(rangeImage_last_msg);
+        // 计算静态点索引
+        std::vector<int> static_point_idx = getStaticIdxFromDynamicIdx(dynamic_point_idx, laserCloudIn->points.size()); // 静态点索引
+
+        // 提取静态点云
+        pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_new_out(new pcl::PointCloud<pcl::PointXYZI>); // 保存静态点云
+        parseStaticMapPointcloudUsingPtIdx(static_point_idx, laserCloudIn, pcl_new_out);
+
+        // 更新上一帧点云和当前点云
+        *lastCloud = *laserCloudIn;   // 将当前点云保存为上一帧点云
+        *laserCloudIn = *pcl_new_out; // 更新当前点云为静态点云
+
+        // 发布范围图
+        cv::Mat normalized_range, u8_range, color_map;                 // 中间结果
+        sensor_msgs::ImagePtr rangeImage_now_msg, rangeImage_last_msg; // ROS 图像消息
+
+        // 处理当前帧范围图
+        cv::normalize(rangeImage_now, normalized_range, 255, 0, cv::NORM_MINMAX);                    // 归一化到0-255
+        normalized_range.convertTo(u8_range, CV_8UC1);                                               // 转换为8位无符号整型
+        cv::applyColorMap(u8_range, color_map, cv::COLORMAP_JET);                                    // 应用伪彩色
+        rangeImage_now_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", color_map).toImageMsg(); // 转换为ROS消息
+        pubRangeImageNow.publish(rangeImage_now_msg);                                                // 发布当前帧范围图
+
+        // 处理上一帧范围图
+        cv::normalize(rangeImage_submap, normalized_range, 255, 0, cv::NORM_MINMAX);                  // 归一化到0-255
+        normalized_range.convertTo(u8_range, CV_8UC1);                                                // 转换为8位无符号整型
+        cv::applyColorMap(u8_range, color_map, cv::COLORMAP_JET);                                     // 应用伪彩色
+        rangeImage_last_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", color_map).toImageMsg(); // 转换为ROS消息
+        pubRangeImageLast.publish(rangeImage_last_msg);                                               // 发布上一帧范围图
     }
 
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
