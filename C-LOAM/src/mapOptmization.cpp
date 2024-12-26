@@ -1224,61 +1224,73 @@ public:
     }
 
     void extractSurroundingKeyFrames(){
-
+        // 如果没有关键帧，直接返回
         if (cloudKeyPoses3D->points.empty() == true)
             return;	
-		
-    	if (loopClosureEnableFlag == true){
-    	    // only use recent key poses for graph building
-                if (recentCornerCloudKeyFrames.size() < surroundingKeyframeSearchNum){ // queue is not full (the beginning of mapping or a loop is just closed)
-                    // clear recent key frames queue
-                    recentCornerCloudKeyFrames. clear();
-                    recentSurfCloudKeyFrames.   clear();
-                    recentOutlierCloudKeyFrames.clear();
-                    int numPoses = cloudKeyPoses3D->points.size();
-                    for (int i = numPoses-1; i >= 0; --i){
-                        int thisKeyInd = (int)cloudKeyPoses3D->points[i].intensity;
-                        PointTypePose thisTransformation = cloudKeyPoses6D->points[thisKeyInd];
-                        updateTransformPointCloudSinCos(&thisTransformation);
-                        // extract surrounding map
-                        recentCornerCloudKeyFrames. push_front(transformPointCloud(cornerCloudKeyFrames[thisKeyInd]));
-                        recentSurfCloudKeyFrames.   push_front(transformPointCloud(surfCloudKeyFrames[thisKeyInd]));
-                        recentOutlierCloudKeyFrames.push_front(transformPointCloud(outlierCloudKeyFrames[thisKeyInd]));
-                        if (recentCornerCloudKeyFrames.size() >= surroundingKeyframeSearchNum)
-                            break;
-                    }
-                }else{  // queue is full, pop the oldest key frame and push the latest key frame
-                    if (latestFrameID != cloudKeyPoses3D->points.size() - 1){  // if the robot is not moving, no need to update recent frames
+        
+        if (loopClosureEnableFlag == true){
+            // 如果启用了回环检测，只使用最近的关键帧构建局部地图
+            if (recentCornerCloudKeyFrames.size() < surroundingKeyframeSearchNum){ 
+                // 队列未满（在建图初期或刚完成回环时）
+                // 清空最近关键帧队列
+                recentCornerCloudKeyFrames.clear();
+                recentSurfCloudKeyFrames.clear();
+                recentOutlierCloudKeyFrames.clear();
+                int numPoses = cloudKeyPoses3D->points.size();
 
-                        recentCornerCloudKeyFrames. pop_front();
-                        recentSurfCloudKeyFrames.   pop_front();
-                        recentOutlierCloudKeyFrames.pop_front();
-                        // push latest scan to the end of queue
-                        latestFrameID = cloudKeyPoses3D->points.size() - 1;
-                        PointTypePose thisTransformation = cloudKeyPoses6D->points[latestFrameID];
-                        updateTransformPointCloudSinCos(&thisTransformation);
-                        recentCornerCloudKeyFrames. push_back(transformPointCloud(cornerCloudKeyFrames[latestFrameID]));
-                        recentSurfCloudKeyFrames.   push_back(transformPointCloud(surfCloudKeyFrames[latestFrameID]));
-                        recentOutlierCloudKeyFrames.push_back(transformPointCloud(outlierCloudKeyFrames[latestFrameID]));
-                    }
+                // 从最新的关键帧开始回溯，获取 surroundingKeyframeSearchNum 个关键帧
+                for (int i = numPoses-1; i >= 0; --i){
+                    int thisKeyInd = (int)cloudKeyPoses3D->points[i].intensity;
+                    PointTypePose thisTransformation = cloudKeyPoses6D->points[thisKeyInd];
+                    updateTransformPointCloudSinCos(&thisTransformation); // 更新坐标变换参数
+                    // 提取变换后的关键帧点云
+                    recentCornerCloudKeyFrames.push_front(transformPointCloud(cornerCloudKeyFrames[thisKeyInd]));
+                    recentSurfCloudKeyFrames.push_front(transformPointCloud(surfCloudKeyFrames[thisKeyInd]));
+                    recentOutlierCloudKeyFrames.push_front(transformPointCloud(outlierCloudKeyFrames[thisKeyInd]));
+                    if (recentCornerCloudKeyFrames.size() >= surroundingKeyframeSearchNum)
+                        break; // 达到指定数量，停止提取
                 }
+            } else { 
+                // 如果队列已满，更新最近关键帧队列
+                if (latestFrameID != cloudKeyPoses3D->points.size() - 1){  
+                    // 如果机器人有新的关键帧，则更新队列
+                    recentCornerCloudKeyFrames.pop_front(); // 弹出最早的关键帧
+                    recentSurfCloudKeyFrames.pop_front();
+                    recentOutlierCloudKeyFrames.pop_front();
+                    // 获取最新关键帧数据并添加到队列末尾
+                    latestFrameID = cloudKeyPoses3D->points.size() - 1;
+                    PointTypePose thisTransformation = cloudKeyPoses6D->points[latestFrameID];
+                    updateTransformPointCloudSinCos(&thisTransformation);
+                    recentCornerCloudKeyFrames.push_back(transformPointCloud(cornerCloudKeyFrames[latestFrameID]));
+                    recentSurfCloudKeyFrames.push_back(transformPointCloud(surfCloudKeyFrames[latestFrameID]));
+                    recentOutlierCloudKeyFrames.push_back(transformPointCloud(outlierCloudKeyFrames[latestFrameID]));
+                }
+            }
 
-                for (int i = 0; i < recentCornerCloudKeyFrames.size(); ++i){
-                    *laserCloudCornerFromMap += *recentCornerCloudKeyFrames[i];
-                    *laserCloudSurfFromMap   += *recentSurfCloudKeyFrames[i];
-                    *laserCloudSurfFromMap   += *recentOutlierCloudKeyFrames[i];
-                }
-    	}else{
+            // 将所有的最近关键帧合并，生成局部地图
+            for (int i = 0; i < recentCornerCloudKeyFrames.size(); ++i){
+                *laserCloudCornerFromMap += *recentCornerCloudKeyFrames[i];
+                *laserCloudSurfFromMap   += *recentSurfCloudKeyFrames[i];
+                *laserCloudSurfFromMap   += *recentOutlierCloudKeyFrames[i];
+            }
+        } else {
+            // 如果没有回环检测，提取周围的关键帧
             surroundingKeyPoses->clear();
             surroundingKeyPosesDS->clear();
-    	    // extract all the nearby key poses and downsample them
-    	    kdtreeSurroundingKeyPoses->setInputCloud(cloudKeyPoses3D);
-    	    kdtreeSurroundingKeyPoses->radiusSearch(currentRobotPosPoint, (double)surroundingKeyframeSearchRadius, pointSearchInd, pointSearchSqDis, 0);
-    	    for (int i = 0; i < pointSearchInd.size(); ++i)
+            
+            // 使用 kd-tree 查找周围的关键帧（半径范围内的）
+            kdtreeSurroundingKeyPoses->setInputCloud(cloudKeyPoses3D);
+            kdtreeSurroundingKeyPoses->radiusSearch(currentRobotPosPoint, (double)surroundingKeyframeSearchRadius, pointSearchInd, pointSearchSqDis, 0);
+
+            // 将查找到的关键帧加入到 surroundingKeyPoses
+            for (int i = 0; i < pointSearchInd.size(); ++i)
                 surroundingKeyPoses->points.push_back(cloudKeyPoses3D->points[pointSearchInd[i]]);
-    	    downSizeFilterSurroundingKeyPoses.setInputCloud(surroundingKeyPoses);
-    	    downSizeFilterSurroundingKeyPoses.filter(*surroundingKeyPosesDS);
-    	    // delete key frames that are not in surrounding region
+            
+            // 对周围的关键帧进行下采样
+            downSizeFilterSurroundingKeyPoses.setInputCloud(surroundingKeyPoses);
+            downSizeFilterSurroundingKeyPoses.filter(*surroundingKeyPosesDS);
+
+            // 删除不在周围区域内的关键帧
             int numSurroundingPosesDS = surroundingKeyPosesDS->points.size();
             for (int i = 0; i < surroundingExistingKeyPosesID.size(); ++i){
                 bool existingFlag = false;
@@ -1289,14 +1301,16 @@ public:
                     }
                 }
                 if (existingFlag == false){
-                    surroundingExistingKeyPosesID.   erase(surroundingExistingKeyPosesID.   begin() + i);
-                    surroundingCornerCloudKeyFrames. erase(surroundingCornerCloudKeyFrames. begin() + i);
-                    surroundingSurfCloudKeyFrames.   erase(surroundingSurfCloudKeyFrames.   begin() + i);
+                    // 删除不在周围范围内的关键帧及其点云
+                    surroundingExistingKeyPosesID.erase(surroundingExistingKeyPosesID.begin() + i);
+                    surroundingCornerCloudKeyFrames.erase(surroundingCornerCloudKeyFrames.begin() + i);
+                    surroundingSurfCloudKeyFrames.erase(surroundingSurfCloudKeyFrames.begin() + i);
                     surroundingOutlierCloudKeyFrames.erase(surroundingOutlierCloudKeyFrames.begin() + i);
                     --i;
                 }
             }
-    	    // add new key frames that are not in calculated existing key frames
+
+            // 添加新的关键帧及其点云
             for (int i = 0; i < numSurroundingPosesDS; ++i) {
                 bool existingFlag = false;
                 for (auto iter = surroundingExistingKeyPosesID.begin(); iter != surroundingExistingKeyPosesID.end(); ++iter){
@@ -1307,32 +1321,35 @@ public:
                 }
                 if (existingFlag == true){
                     continue;
-                }else{
+                } else {
                     int thisKeyInd = (int)surroundingKeyPosesDS->points[i].intensity;
                     PointTypePose thisTransformation = cloudKeyPoses6D->points[thisKeyInd];
                     updateTransformPointCloudSinCos(&thisTransformation);
-                    surroundingExistingKeyPosesID.   push_back(thisKeyInd);
-                    surroundingCornerCloudKeyFrames. push_back(transformPointCloud(cornerCloudKeyFrames[thisKeyInd]));
-                    surroundingSurfCloudKeyFrames.   push_back(transformPointCloud(surfCloudKeyFrames[thisKeyInd]));
+                    surroundingExistingKeyPosesID.push_back(thisKeyInd);
+                    surroundingCornerCloudKeyFrames.push_back(transformPointCloud(cornerCloudKeyFrames[thisKeyInd]));
+                    surroundingSurfCloudKeyFrames.push_back(transformPointCloud(surfCloudKeyFrames[thisKeyInd]));
                     surroundingOutlierCloudKeyFrames.push_back(transformPointCloud(outlierCloudKeyFrames[thisKeyInd]));
                 }
             }
 
+            // 合并周围区域的所有关键帧点云
             for (int i = 0; i < surroundingExistingKeyPosesID.size(); ++i) {
                 *laserCloudCornerFromMap += *surroundingCornerCloudKeyFrames[i];
                 *laserCloudSurfFromMap   += *surroundingSurfCloudKeyFrames[i];
                 *laserCloudSurfFromMap   += *surroundingOutlierCloudKeyFrames[i];
             }
-    	}
-        // Downsample the surrounding corner key frames (or map)
+        }
+
+        // 对提取的角点和面点云进行下采样
         downSizeFilterCorner.setInputCloud(laserCloudCornerFromMap);
         downSizeFilterCorner.filter(*laserCloudCornerFromMapDS);
         laserCloudCornerFromMapDSNum = laserCloudCornerFromMapDS->points.size();
-        // Downsample the surrounding surf key frames (or map)
+
         downSizeFilterSurf.setInputCloud(laserCloudSurfFromMap);
         downSizeFilterSurf.filter(*laserCloudSurfFromMapDS);
         laserCloudSurfFromMapDSNum = laserCloudSurfFromMapDS->points.size();
     }
+
 
     void downsampleCurrentScan(){
 
@@ -1602,21 +1619,25 @@ public:
     }
 
     void GroundConstraint(){
+        // 检查是否有新的地面点云数据，且点云数量足够（> 50）
         if(newLaserGroundPoints && laserGroundPoints->points.size() > 50){
-            newLaserGroundPoints = false;
+            newLaserGroundPoints = false; // 标志复位，避免重复处理
+
+            // 下采样地面点云，减小计算量
             pcl::PointCloud<pcl::PointXYZI>::Ptr laserGroundPointsDS(new pcl::PointCloud<pcl::PointXYZI>);
-            pcl::VoxelGrid<PointType> vf_ground;
-            vf_ground.setLeafSize(0.4, 0.4, 0.4);
-            vf_ground.setInputCloud(laserGroundPoints);
-            vf_ground.filter(*laserGroundPointsDS);
+            pcl::VoxelGrid<PointType> vf_ground; // 使用体素网格滤波器
+            vf_ground.setLeafSize(0.4, 0.4, 0.4); // 设置滤波的分辨率
+            vf_ground.setInputCloud(laserGroundPoints); // 输入原始地面点云
+            vf_ground.filter(*laserGroundPointsDS); // 输出下采样后的地面点云
 
             // 提取地面法线
             int groundPointsSize = laserGroundPointsDS->points.size();
             Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> matA0;
             Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> matB0;
 
-            matA0.resize(groundPointsSize, 3);
-            matB0.setOnes(groundPointsSize, 1);
+            // 构建线性方程 Ax + By + Cz + D = 0 中的矩阵A和B
+            matA0.resize(groundPointsSize, 3); // 存储点云的x, y, z坐标
+            matB0.setOnes(groundPointsSize, 1); // B初始化为-1向量
             matB0 = -1 * matB0;
 
             for (int i = 0; i < groundPointsSize; i++) {
@@ -1624,79 +1645,79 @@ public:
                 matA0(i, 1) = laserGroundPointsDS->points[i].y;
                 matA0(i, 2) = laserGroundPointsDS->points[i].z;
             }
-            Eigen::Vector3f ground_normal;
-            // find the norm of plane
-            ground_normal = matA0.colPivHouseholderQr().solve(matB0);
-            // ground_normal = this->T.block<3,3>(0,0) * ground_normal + this->T.block<3,1>(0,3);
-            float negative_OA_dot_norm = 1 / ground_normal.norm();
-            ground_normal.normalize();
 
-            // calculate angle between the two vectors
-            Eigen::Vector3f grav(0, 0, 1);
+            // 求解地面法线向量（ground_normal）
+            Eigen::Vector3f ground_normal = matA0.colPivHouseholderQr().solve(matB0); // 最小二乘法求解
+            float negative_OA_dot_norm = 1 / ground_normal.norm(); // 用于校正D项
+            ground_normal.normalize(); // 单位化法线向量
+
+            // 计算地面法线与重力方向的夹角，获取旋转四元数
+            Eigen::Vector3f grav(0, 0, 1); // 重力方向为Z轴正方向
             Eigen::Quaternionf ground_q = Eigen::Quaternionf::FromTwoVectors(ground_normal, grav);
             ground_q.normalize();
+            Eigen::Vector3f ground_ypr = ground_q.toRotationMatrix().eulerAngles(2, 1, 0); // 转换为YPR角
 
-            Eigen::Vector3f ground_ypr = ground_q.toRotationMatrix().eulerAngles(2, 1, 0);
-
-            // Here n(pa, pb, pc) is unit norm of plane
+            // 检查地面拟合平面是否有效
             bool planeValid = true;
             for (int i = 0; i < groundPointsSize; i++){
-                // if OX * n > 0.2, then plane is not fit well
+                // 如果平面方程残差过大，则认为平面无效
                 if (fabs(ground_normal(0) * laserGroundPointsDS->points[i].x +
                         ground_normal(1) * laserGroundPointsDS->points[i].y +
                         ground_normal(2) * laserGroundPointsDS->points[i].z + negative_OA_dot_norm) > 0.1){
-                        planeValid = false;
-                        break;
+                    planeValid = false;
+                    break;
                 }
             }
-            para_tz[0] = static_cast<double>(transformTobeMapped[4]);
+
+            // 提取当前位姿的z轴位移和四元数表示
+            para_tz[0] = static_cast<double>(transformTobeMapped[4]); // z轴平移
             Eigen::AngleAxisf rollAngle(AngleAxisf(transformTobeMapped[2],Vector3f::UnitX()));
             Eigen::AngleAxisf pitchAngle(AngleAxisf(transformTobeMapped[0],Vector3f::UnitY()));
             Eigen::AngleAxisf yawAngle(AngleAxisf(transformTobeMapped[1],Vector3f::UnitZ()));
-            Eigen::Quaternionf q_tem;
-            q_tem = yawAngle * pitchAngle * rollAngle;
+            Eigen::Quaternionf q_tem = yawAngle * pitchAngle * rollAngle;
             q_tem.normalize();
+
             para_q[0] = static_cast<double>(q_tem.x());
             para_q[1] = static_cast<double>(q_tem.y());
             para_q[2] = static_cast<double>(q_tem.z());
             para_q[3] = static_cast<double>(q_tem.w());
 
-            ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
+            // 设置 Ceres 优化问题
+            ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1); // 使用 Huber 损失函数
             ceres::Problem::Options problem_options;
-
             ceres::Problem problem(problem_options);
-            problem.AddParameterBlock(para_tz, 1);
-            problem.AddParameterBlock(para_q, 4);
+            problem.AddParameterBlock(para_tz, 1); // 添加z轴位移参数
+            problem.AddParameterBlock(para_q, 4);  // 添加旋转四元数参数
 
+            // 如果地面平面有效，施加地面法线约束
             if (use_ground_contraint && groundPointsSize){
-                // 利用地面法线施加约束
                 if (planeValid){
-                    ceres::CostFunction* Gravity_factor = PitchRollFactor::Create(ground_ypr[1], ground_ypr[2], 0.02); // 全局约束：不能小于0.01
+                    ceres::CostFunction* Gravity_factor = PitchRollFactor::Create(ground_ypr[1], ground_ypr[2], 0.02);
                     problem.AddResidualBlock(Gravity_factor, NULL, para_q);
                 }
 
-                // 添加z轴位移约束: 位移方差设置为0.01；
-                double ground_cov = 40000;
+                // 添加z轴位移约束，设置不同的方差值
+                double ground_cov = 40000; // 初始较大方差
                 if (groundPointsSize > 10) {
                     ground_cov = 0.01;
                 }
                 if (fabs(transformTobeMapped[1]) < 5.0){
                     ground_cov = 0.00001;
                 }
-                        
                 ceres::CostFunction* Ground_factor = GroundFactor::Create(ground_cov, para_tz_pre);
                 problem.AddResidualBlock(Ground_factor, NULL, para_tz);
             }
+
+            // Ceres 求解器设置
             ceres::Solver::Options options;
             options.linear_solver_type = ceres::DENSE_QR;
-            options.max_num_iterations = 6;
+            options.max_num_iterations = 6; // 最大迭代次数
             options.minimizer_progress_to_stdout = false;
-            options.check_gradients = false;
-            options.gradient_check_relative_precision = 1e-4;
             ceres::Solver::Summary summary;
-            ceres::Solve(options, &problem, &summary);
+            ceres::Solve(options, &problem, &summary); // 执行优化
 
-            transformTobeMapped[4] = para_tz[0];
+            // 更新位姿
+            transformTobeMapped[4] = para_tz[0]; // 更新z轴平移
             q_tem.w() = static_cast<float>(para_q[3]);
             q_tem.x() = static_cast<float>(para_q[0]);
             q_tem.y() = static_cast<float>(para_q[1]);
@@ -1704,12 +1725,14 @@ public:
             q_tem.normalize();
             Eigen::Vector3f opt_rpy = q_tem.toRotationMatrix().eulerAngles(2, 1, 0);
 
-            // transformTobeMapped[0] = opt_rpy[1]; //pitch
-            // transformTobeMapped[2] = opt_rpy[2]; //roll
+            // 可选更新Roll和Pitch角
+            // transformTobeMapped[0] = opt_rpy[1]; // pitch
+            // transformTobeMapped[2] = opt_rpy[2]; // roll
 
-            para_tz_pre = static_cast<double>(transformTobeMapped[4]);
+            para_tz_pre = static_cast<double>(transformTobeMapped[4]); // 记录上一帧z轴位移
         }
     }
+
 
     void scan2MapOptimization(){
 

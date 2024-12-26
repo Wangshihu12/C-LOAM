@@ -1,11 +1,3 @@
-/****************************************************************************************
- *
- * Copyright (c) 2024, Shenyang Institute of Automation, Chinese Academy of Sciences
- *
- * Authors: Yanpeng Jia
- * Contact: jiayanpeng@sia.cn
- *
- ****************************************************************************************/
 #pragma once
 
 #include <ceres/ceres.h>
